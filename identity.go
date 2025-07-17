@@ -39,7 +39,11 @@ type Identity interface {
 }
 
 // CreateAndRegisterID creates an Identity and attempts to register it on the DiscoveryService
-func CreateAndRegisterID(id string, d time.Duration, h Handler, ds DiscoveryService) (Identity, error) {
+func CreateAndRegisterID(ds DiscoveryService, id string, d time.Duration, h Handler) (Identity, error) {
+	if ds == nil {
+		return nil, ErrNoDiscoveryService
+	}
+
 	i := &identity{
 		id:          id,
 		ch:          make(chan *Connect),

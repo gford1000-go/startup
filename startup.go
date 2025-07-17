@@ -94,8 +94,7 @@ func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*O
 		}
 	}
 
-	funcOps := FunctionOptions{}
-
+	var funcOps FunctionOptions
 	if o.DiscoveryService {
 		funcOps.DiscoveryService = NewDiscoveryService()
 	}
