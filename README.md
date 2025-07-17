@@ -7,7 +7,7 @@ A simple mechanism to start goroutines in reliably, capturing interrupts and all
 
 ```go
 func main() {
-    myMain := func(ctx context.Context) {
+    myMain := func(ctx context.Context, opts FunctionOptions) {
         // Do some work, until context is Done
         <-ctx.Done()
     }
@@ -25,5 +25,6 @@ Any number of `StartableFunction` can be provided to `StartFunctions`, with each
 
 * `WithLogging` enables logging behaviour, useful for debugging (default: no logging)
 * `WithTimeout` allows a timeout to be specified for `StartFunctions` to exit (default: 30 seconds)
+* `WithDiscoveryService` creates a `DiscoveryService` so that functions can discover and communicate with each other
 
 See examples for usage.
