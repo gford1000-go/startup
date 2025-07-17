@@ -11,8 +11,14 @@ import (
 	"time"
 )
 
+// FunctionOptions are options provided to StartableFunctions
+type FunctionOptions struct {
+	// DiscoveryService is provided if specified as an option for StartFunctions
+	DiscoveryService DiscoveryService
+}
+
 // StartableFunction defines a func that can be provided to StartFunctions
-type StartableFunction func(context.Context)
+type StartableFunction func(context.Context, *FunctionOptions)
 
 // Options allow the behaviour of StartFunctions to be modified
 type Options struct {
@@ -22,6 +28,8 @@ type Options struct {
 	ReportPanicsOnly bool
 	// Timeout specifies the duration to wait for StartableFunctions to gracefully exit
 	Timeout time.Duration
+	// DiscoveryService will create a new DiscoveryService that is provided to StartableFunctions
+	DiscoveryService bool
 }
 
 // WithLogging allows a log.Logger to be specified for capturing StartFunctions activity.
@@ -42,6 +50,13 @@ func WithTimeout(d time.Duration) func(*Options) {
 		if d > 0 {
 			o.Timeout = d
 		}
+	}
+}
+
+// WithDiscoveryService specifies a DiscoveryService should be created
+func WithDiscoveryService() func(*Options) {
+	return func(o *Options) {
+		o.DiscoveryService = true
 	}
 }
 
@@ -77,6 +92,12 @@ func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*O
 		if o.Logger != nil {
 			o.Logger.Println(err)
 		}
+	}
+
+	funcOps := FunctionOptions{}
+
+	if o.DiscoveryService {
+		funcOps.DiscoveryService = NewDiscoveryService()
 	}
 
 	cs := make([]context.Context, 0, len(fs))
@@ -145,7 +166,7 @@ func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*O
 				}
 			}()
 
-			f(ctx)
+			f(ctx, &funcOps)
 			return nil
 		}
 

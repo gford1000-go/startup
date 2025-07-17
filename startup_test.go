@@ -13,7 +13,7 @@ func Example() {
 	var buf bytes.Buffer
 	logger := log.New(&buf, "", 0)
 
-	myMain := func(ctx context.Context) {
+	myMain := func(ctx context.Context, opts *FunctionOptions) {
 		logger.Println("starting myMain")
 		defer logger.Println("exiting myMain")
 
@@ -33,7 +33,7 @@ func Example() {
 
 func ExampleStartFunctions() {
 
-	mainBoom := func(ctx context.Context) {
+	mainBoom := func(ctx context.Context, opts *FunctionOptions) {
 		<-time.After(50 * time.Millisecond)
 		panic("Boom!")
 	}
@@ -52,13 +52,13 @@ func ExampleStartFunctions() {
 
 func ExampleStartFunctions_second() {
 
-	myMain := func(ctx context.Context) {
+	myMain := func(ctx context.Context, opts *FunctionOptions) {
 		defer fmt.Println("myMain exited")
 
 		// Emulate finishing work
 		<-time.After(50 * time.Millisecond)
 	}
-	anotherFn := func(ctx context.Context) {
+	anotherFn := func(ctx context.Context, opts *FunctionOptions) {
 		defer fmt.Println("anotherFn exited as well")
 
 		// Not finished, but will exit
