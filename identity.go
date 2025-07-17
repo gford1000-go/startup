@@ -31,7 +31,7 @@ type Identity interface {
 	// Loc is the initiating Location for a Connection to be established
 	Loc() Location
 	// Accept allows an Identity to respond to Connection attempts
-	Accept(context.Context)
+	Accept(context.Context) error
 	// Allows an Identity to connect to another Identity specified by the id
 	Connect(ctx context.Context, id string, opts ...func(*ConnectOptions)) (*Connection, error)
 	// Send allows an Identity to make a request to the remote identity, after Connection is established
@@ -44,9 +44,15 @@ func CreateAndRegisterID(ds DiscoveryService, id string, d time.Duration, h Hand
 		return nil, ErrNoDiscoveryService
 	}
 
+	// Identities are only connectable if they have a Handler
+	var ch chan *Connect
+	if h != nil {
+		ch = make(chan *Connect)
+	}
+
 	i := &identity{
 		id:          id,
-		ch:          make(chan *Connect),
+		ch:          ch,
 		h:           h,
 		idleTimeout: d,
 	}
@@ -75,14 +81,21 @@ func (i *identity) Loc() Location {
 	return i.ch
 }
 
-func (i *identity) Accept(ctx context.Context) {
+// ErrNoHandlerCannotAccept returned if attempting to call Accept() with no Handler
+var ErrNoHandlerCannotAccept = errors.New("no handler has been specified, so cannot accept connections")
+
+func (i *identity) Accept(ctx context.Context) error {
+	if i.h == nil {
+		return ErrNoHandlerCannotAccept
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case c, ok := <-i.ch:
 			if !ok {
-				return
+				return nil
 			}
 			// For now, ignore ID
 			ch := reqChPool.Get().(chan *ReqWithChan)
@@ -167,6 +180,9 @@ func WithConnectDiscoveryService(ds DiscoveryService) func(*ConnectOptions) {
 // ErrNoDiscoveryService returned when a DiscoveryService is not specified (there is no default service)
 var ErrNoDiscoveryService = errors.New("cannot connect, no Discovery Service available")
 
+// ErrCannotConnect returned if the Identity is not accepting connections
+var ErrCannotConnect = errors.New("identity exists but cannot be contacted")
+
 func (i *identity) Connect(ctx context.Context, id string, opts ...func(*ConnectOptions)) (*Connection, error) {
 
 	var o ConnectOptions = defaultConnectOptions
@@ -180,6 +196,9 @@ func (i *identity) Connect(ctx context.Context, id string, opts ...func(*Connect
 	loc, err := o.DisoveryService.Find(id)
 	if err != nil {
 		return nil, ErrIDNotFound
+	}
+	if loc == nil {
+		return nil, ErrCannotConnect
 	}
 
 	ch := connChPool.Get().(chan *Connection)
