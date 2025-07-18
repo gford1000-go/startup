@@ -71,6 +71,157 @@ var defaultOptions = Options{
 // shutdown gracefully as well.
 // Standard interrupts (CTRL-C) are captured, and these will trigger a shutdown request to
 // all functions.
+// func StartFunctions1(ctx context.Context, fs []StartableFunction, opts ...func(*Options)) {
+
+// 	o := defaultOptions
+// 	for _, opt := range opts {
+// 		opt(&o)
+// 	}
+
+// 	pause := func() {
+// 		<-time.After(time.Millisecond)
+// 	}
+
+// 	logger := func(s string) {
+// 		if o.Logger != nil && !o.ReportPanicsOnly {
+// 			o.Logger.Println(s)
+// 		}
+// 	}
+
+// 	logPanic := func(err error) {
+// 		if o.Logger != nil {
+// 			o.Logger.Println(err)
+// 		}
+// 	}
+
+// 	var funcOps FunctionOptions
+// 	if o.DiscoveryService {
+// 		funcOps.DiscoveryService = NewDiscoveryService()
+// 	}
+
+// 	cs := make([]context.Context, 0, len(fs))
+// 	cfs := make([]context.CancelFunc, 0, len(fs))
+// 	chs := make([]chan struct{}, 0, len(fs))
+// 	for range len(fs) {
+// 		// Contexts for the functions are independent of each other and the supplied context
+// 		c, cf := context.WithCancel(context.Background())
+// 		cs = append(cs, c)
+// 		cfs = append(cfs, cf)
+// 		chs = append(chs, make(chan struct{}, 1))
+// 	}
+
+// 	// This context is used to prevent this function from exiting
+// 	// until a shutdown condition is met.
+// 	exitCtx, exitCancel := context.WithCancel(context.Background())
+// 	defer exitCancel()
+
+// 	// Create a new cancellable context, which will handle graceful cancellation of the functions
+// 	shutdownCtx, shutdownCancel := context.WithCancel(ctx)
+// 	defer shutdownCancel()
+
+// 	go func() {
+// 		<-shutdownCtx.Done()
+
+// 		logger("cancelling all contexts")
+// 		for _, cf := range cfs {
+// 			cf()
+// 		}
+
+// 		exitCancel() // Will now start waiting for shutdowns to complete
+// 	}()
+
+// 	// Trap interrupts
+// 	signalChan := make(chan os.Signal, 1)
+// 	signal.Notify(signalChan, os.Interrupt)
+
+// 	// Exits either when interrupt is detected, or when told to shutdown
+// 	go func() {
+// 		defer signal.Stop(signalChan)
+
+// 		select {
+// 		case <-signalChan:
+// 			logger("received interrupt")
+// 			shutdownCancel() // Trigger shutdowns
+// 		case <-shutdownCtx.Done():
+// 			// Requested to shutdown as well
+// 		}
+// 	}()
+
+// 	pause()
+
+// 	// Wrapper ensures graceful launch and shutdown, recovering from unhandled panics from functions
+// 	// Note this doesn't deal with all unhandled panics: if functions start further goroutines
+// 	// which then panic, that scenario is uncontrolled
+// 	fWrapper := func(ctx context.Context, ctxCancel context.CancelFunc, ch chan struct{}, f StartableFunction) {
+
+// 		inner := func(ctx context.Context, f StartableFunction) (err error) {
+// 			defer ctxCancel() // Order ensures the supplied ctx is aways cancelled when f() exits
+// 			defer func() {
+// 				ch <- struct{}{}
+// 			}()
+// 			defer func() {
+// 				if r := recover(); r != nil {
+// 					err = fmt.Errorf("caught unhandled panic in (%s): %v", runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name(), r)
+// 				}
+// 			}()
+
+// 			f(ctx, &funcOps)
+// 			return nil
+// 		}
+
+// 		go func() {
+// 			defer shutdownCancel() // Always cancel the cancellable context, triggering shutdown
+
+// 			err := inner(ctx, f)
+// 			if err != nil {
+// 				logPanic(err)
+// 			}
+// 		}()
+
+// 		pause()
+// 	}
+
+// 	// Start the functions in their own goroutines
+// 	for i, f := range fs {
+// 		fWrapper(cs[i], cfs[i], chs[i], f)
+// 	}
+
+// 	// Handle shutdown with optional timeout
+// 	ch := make(chan struct{})
+
+// 	// In shutdown sequence, each function's inner() will push a struct{}{} to notify that it has exited
+// 	// So exit will be signalled once all functions have exited
+// 	go func() {
+// 		defer func() {
+// 			ch <- struct{}{}
+// 		}()
+
+// 		for _, c := range chs {
+// 			<-c
+// 		}
+// 	}()
+
+// 	pause()
+
+// 	// Wait for notification to exit
+// 	<-exitCtx.Done()
+
+// 	logger("waiting for Done() from contexts")
+// 	select {
+// 	case <-ch:
+// 		logger("all contexts are Done()")
+// 	case <-time.After(o.Timeout):
+// 		logger("timed out waiting for Done() from contexts")
+// 	}
+// }
+
+// StartFunctions starts the specified StartableFunctions in separate goroutines, each with
+// independent contexts.
+// Should one of the functions exit, whether expected or due to a panic, then the contexts
+// of the other functions will be completed, so they will be expected to detect this and
+// shutdown gracefully as well.
+// Standard interrupts (CTRL-C) are captured, and these will trigger a shutdown request to
+// all functions.
 func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*Options)) {
 
 	o := defaultOptions
@@ -78,58 +229,85 @@ func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*O
 		opt(&o)
 	}
 
-	pause := func() {
-		<-time.After(time.Millisecond)
+	f := &funcMgr{
+		ctx: ctx,
+		o:   o,
+		cs:  make([]context.Context, 0, len(fs)),
+		cfs: make([]context.CancelFunc, 0, len(fs)),
+		chs: make([]chan struct{}, 0, len(fs)),
 	}
 
-	logger := func(s string) {
-		if o.Logger != nil && !o.ReportPanicsOnly {
-			o.Logger.Println(s)
-		}
+	if f.o.DiscoveryService {
+		f.funcOps.DiscoveryService = NewDiscoveryService()
 	}
 
-	logPanic := func(err error) {
-		if o.Logger != nil {
-			o.Logger.Println(err)
-		}
-	}
-
-	var funcOps FunctionOptions
-	if o.DiscoveryService {
-		funcOps.DiscoveryService = NewDiscoveryService()
-	}
-
-	cs := make([]context.Context, 0, len(fs))
-	cfs := make([]context.CancelFunc, 0, len(fs))
-	chs := make([]chan struct{}, 0, len(fs))
+	// Contexts for the functions are independent of each other and the supplied context
 	for range len(fs) {
-		// Contexts for the functions are independent of each other and the supplied context
 		c, cf := context.WithCancel(context.Background())
-		cs = append(cs, c)
-		cfs = append(cfs, cf)
-		chs = append(chs, make(chan struct{}, 1))
+		f.cs = append(f.cs, c)
+		f.cfs = append(f.cfs, cf)
+		f.chs = append(f.chs, make(chan struct{}, 1))
 	}
 
 	// This context is used to prevent this function from exiting
 	// until a shutdown condition is met.
-	exitCtx, exitCancel := context.WithCancel(context.Background())
-	defer exitCancel()
+	f.exitCtx, f.exitCancel = context.WithCancel(context.Background())
 
 	// Create a new cancellable context, which will handle graceful cancellation of the functions
-	shutdownCtx, shutdownCancel := context.WithCancel(ctx)
-	defer shutdownCancel()
+	f.shutdownCtx, f.shutdownCancel = context.WithCancel(ctx)
+
+	// Start awaiting on shutdown requests
+	f.startAwaitShutdown()
+
+	// Capture interupts that could trigger shutdown
+	f.startInterruptHandling()
+
+	// Start the functions in their own goroutines
+	for i, fn := range fs {
+		f.fWrapper(f.cs[i], f.cfs[i], f.chs[i], fn)
+	}
+
+	f.awaitExit()
+}
+
+type funcMgr struct {
+	ctx            context.Context
+	o              Options
+	funcOps        FunctionOptions
+	cs             []context.Context
+	cfs            []context.CancelFunc
+	chs            []chan struct{}
+	exitCtx        context.Context
+	exitCancel     context.CancelFunc
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
+}
+
+func (f *funcMgr) exit() {
+	f.exitCancel()
+}
+
+func (f *funcMgr) shutdown() {
+	f.shutdownCancel()
+}
+
+func (f *funcMgr) startAwaitShutdown() {
 
 	go func() {
-		<-shutdownCtx.Done()
+		<-f.shutdownCtx.Done()
 
-		logger("cancelling all contexts")
-		for _, cf := range cfs {
+		f.logger("cancelling all contexts")
+		for _, cf := range f.cfs {
 			cf()
 		}
 
-		exitCancel() // Will now start waiting for shutdowns to complete
+		f.exit() // Will now start waiting for shutdowns to complete
 	}()
 
+	f.pause()
+}
+
+func (f *funcMgr) startInterruptHandling() {
 	// Trap interrupts
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
@@ -140,52 +318,49 @@ func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*O
 
 		select {
 		case <-signalChan:
-			logger("received interrupt")
-			shutdownCancel() // Trigger shutdowns
-		case <-shutdownCtx.Done():
+			f.logger("received interrupt")
+			f.shutdown() // Trigger shutdowns
+		case <-f.shutdownCtx.Done():
 			// Requested to shutdown as well
 		}
 	}()
 
-	pause()
+	f.pause()
+}
 
-	// Wrapper ensures graceful launch and shutdown, recovering from unhandled panics from functions
-	// Note this doesn't deal with all unhandled panics: if functions start further goroutines
-	// which then panic, that scenario is uncontrolled
-	fWrapper := func(ctx context.Context, ctxCancel context.CancelFunc, ch chan struct{}, f StartableFunction) {
+// Wrapper ensures graceful launch and shutdown, recovering from unhandled panics from functions
+// Note this doesn't deal with all unhandled panics: if functions start further goroutines
+// which then panic, that scenario is uncontrolled
+func (f *funcMgr) fWrapper(ctx context.Context, ctxCancel context.CancelFunc, ch chan struct{}, sf StartableFunction) {
 
-		inner := func(ctx context.Context, f StartableFunction) (err error) {
-			defer ctxCancel() // Order ensures the supplied ctx is aways cancelled when f() exits
-			defer func() {
-				ch <- struct{}{}
-			}()
-			defer func() {
-				if r := recover(); r != nil {
-					err = fmt.Errorf("caught unhandled panic in (%s): %v", runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name(), r)
-				}
-			}()
-
-			f(ctx, &funcOps)
-			return nil
-		}
-
-		go func() {
-			defer shutdownCancel() // Always cancel the cancellable context, triggering shutdown
-
-			err := inner(ctx, f)
-			if err != nil {
-				logPanic(err)
+	inner := func(ctx context.Context, fn StartableFunction) (err error) {
+		defer ctxCancel() // Order ensures the supplied ctx is aways cancelled when f() exits
+		defer func() {
+			ch <- struct{}{}
+		}()
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("caught unhandled panic in (%s): %v", runtime.FuncForPC(reflect.ValueOf(sf).Pointer()).Name(), r)
 			}
 		}()
 
-		pause()
+		fn(ctx, &f.funcOps)
+		return nil
 	}
 
-	// Start the functions in their own goroutines
-	for i, f := range fs {
-		fWrapper(cs[i], cfs[i], chs[i], f)
-	}
+	go func() {
+		defer f.shutdown() // Always cancel the cancellable context, triggering shutdown
 
+		err := inner(ctx, sf)
+		if err != nil {
+			f.logPanic(err)
+		}
+	}()
+
+	f.pause()
+}
+
+func (f *funcMgr) awaitExit() {
 	// Handle shutdown with optional timeout
 	ch := make(chan struct{})
 
@@ -196,21 +371,38 @@ func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*O
 			ch <- struct{}{}
 		}()
 
-		for _, c := range chs {
+		for _, c := range f.chs {
 			<-c
 		}
 	}()
 
-	pause()
+	f.pause()
 
 	// Wait for notification to exit
-	<-exitCtx.Done()
+	<-f.exitCtx.Done()
 
-	logger("waiting for Done() from contexts")
+	f.logger("waiting for Done() from contexts")
 	select {
 	case <-ch:
-		logger("all contexts are Done()")
-	case <-time.After(o.Timeout):
-		logger("timed out waiting for Done() from contexts")
+		f.logger("all contexts are Done()")
+	case <-time.After(f.o.Timeout):
+		f.logger("timed out waiting for Done() from contexts")
+	}
+
+}
+
+func (f *funcMgr) pause() {
+	<-time.After(time.Millisecond)
+}
+
+func (f *funcMgr) logger(s string) {
+	if f.o.Logger != nil && !f.o.ReportPanicsOnly {
+		f.o.Logger.Println(s)
+	}
+}
+
+func (f *funcMgr) logPanic(err error) {
+	if f.o.Logger != nil {
+		f.o.Logger.Println(err)
 	}
 }
