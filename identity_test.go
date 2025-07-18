@@ -1,7 +1,6 @@
 package startup
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -44,7 +43,7 @@ func ExampleCreateAndRegisterID() {
 
 		req := &Req{
 			Type: "text",
-			Data: []byte("Hello World"),
+			Data: "Hello World",
 		}
 
 		r := alice.Send(ctx, req, c.ReqChan)
@@ -52,7 +51,7 @@ func ExampleCreateAndRegisterID() {
 		// Reflection should be successful
 		fmt.Println(r.Status == Success ||
 			r.Type == req.Type ||
-			bytes.Equal(r.Data, req.Data))
+			r.Data.(string) == req.Data.(string))
 	}
 
 	StartFunctions(context.Background(), []StartableFunction{

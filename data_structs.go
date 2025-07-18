@@ -4,7 +4,7 @@ package startup
 // The request describes the type of the data (encoded as JSON)
 type Req struct {
 	Type string
-	Data []byte
+	Data any
 }
 
 // ReqWithChan provides the chan on which the Requestor is expecting the Res
@@ -29,6 +29,6 @@ const (
 type Res struct {
 	Status Status
 	Type   string
-	Data   []byte
+	Data   any
 	Error  error
 }
