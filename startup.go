@@ -32,6 +32,8 @@ type Options struct {
 	Timeout time.Duration
 	// DiscoveryService will create a new DiscoveryService that is provided to StartableFunctions
 	DiscoveryService bool
+	// PauseTimeout is the duration a routine will wait, to allow a goroutine it has started time to be to scheduled
+	PauseTimeout time.Duration
 }
 
 // WithLogging allows a log.Logger to be specified for capturing StartFunctions activity.
@@ -62,8 +64,18 @@ func WithDiscoveryService() func(*Options) {
 	}
 }
 
+// WithPauseDuration specifies the pause for goroutine scheduling, must be greater than 1ms
+func WithPauseDuration(d time.Duration) func(*Options) {
+	return func(o *Options) {
+		if d > 1*time.Millisecond {
+			o.PauseTimeout = d
+		}
+	}
+}
+
 var defaultOptions = Options{
-	Timeout: 30 * time.Second,
+	Timeout:      30 * time.Second,
+	PauseTimeout: 1 * time.Millisecond,
 }
 
 // ErrMissingStartableFunctions is raised if no StartableFunctions are provided to StartFunctions
@@ -289,7 +301,7 @@ func (f *funcMgr) awaitExit() {
 }
 
 func (f *funcMgr) pause() {
-	<-time.After(time.Millisecond)
+	<-time.After(f.o.PauseTimeout)
 }
 
 func (f *funcMgr) logger(s string) {
