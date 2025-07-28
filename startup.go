@@ -32,50 +32,64 @@ type Options struct {
 	Timeout time.Duration
 	// DiscoveryService will create a new DiscoveryService that is provided to StartableFunctions
 	DiscoveryService bool
-	// PauseTimeout is the duration a routine will wait, to allow a goroutine it has started time to be to scheduled
-	PauseTimeout time.Duration
+	// PauseDuration is the duration a routine will wait, to allow a goroutine it has started time to be to scheduled
+	PauseDuration time.Duration
 }
+
+type OptionSetter func(*Options) error
 
 // WithLogging allows a log.Logger to be specified for capturing StartFunctions activity.
 // If no Logger is provided, then no logging will be performed.
 // If unhandledPanicsOnly is set to true, then only unrecovered panics are logged, rather
 // than all logging activity.  This makes it easier to see which StartableFunction failed.
-func WithLogging(l *log.Logger, unhandledPanicsOnly bool) func(*Options) {
-	return func(o *Options) {
+func WithLogging(l *log.Logger, unhandledPanicsOnly bool) OptionSetter {
+	return func(o *Options) error {
 		o.Logger = l
 		o.ReportPanicsOnly = unhandledPanicsOnly
+		return nil
 	}
 }
 
+// ErrInvalidTimeout raised if WithTimeout() is called with a 0 or negative duration
+var ErrInvalidTimeout = errors.New("exit timeout must be greater than zero")
+
 // WithTimeout specifies the duration to allow for the StartableFunctions to exit gracefully.
 // Default is 30 seconds.
-func WithTimeout(d time.Duration) func(*Options) {
-	return func(o *Options) {
+func WithTimeout(d time.Duration) OptionSetter {
+	return func(o *Options) error {
 		if d > 0 {
 			o.Timeout = d
+			return nil
 		}
+		return ErrInvalidTimeout
 	}
 }
 
 // WithDiscoveryService specifies a DiscoveryService should be created
-func WithDiscoveryService() func(*Options) {
-	return func(o *Options) {
+func WithDiscoveryService() OptionSetter {
+	return func(o *Options) error {
 		o.DiscoveryService = true
+		return nil
 	}
 }
 
+// ErrInvalidPauseTimeout raised if WithPauseDuration is less than one millisecond
+var ErrInvalidPauseTimeout = errors.New("pause duration must be greater than one millisecond")
+
 // WithPauseDuration specifies the pause for goroutine scheduling, must be greater than 1ms
-func WithPauseDuration(d time.Duration) func(*Options) {
-	return func(o *Options) {
+func WithPauseDuration(d time.Duration) OptionSetter {
+	return func(o *Options) error {
 		if d > 1*time.Millisecond {
-			o.PauseTimeout = d
+			o.PauseDuration = d
+			return nil
 		}
+		return ErrInvalidPauseTimeout
 	}
 }
 
 var defaultOptions = Options{
-	Timeout:      30 * time.Second,
-	PauseTimeout: 1 * time.Millisecond,
+	Timeout:       30 * time.Second,
+	PauseDuration: 1 * time.Millisecond,
 }
 
 // ErrMissingStartableFunctions is raised if no StartableFunctions are provided to StartFunctions
@@ -88,7 +102,7 @@ var ErrMissingStartableFunctions = errors.New("at least one StartableFunction mu
 // shutdown gracefully as well.
 // Standard interrupts (CTRL-C) are captured, and these will trigger a shutdown request to
 // all functions.
-func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*Options)) error {
+func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...OptionSetter) error {
 
 	if len(fs) == 0 {
 		return ErrMissingStartableFunctions
@@ -96,7 +110,9 @@ func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*O
 
 	o := defaultOptions
 	for _, opt := range opts {
-		opt(&o)
+		if err := opt(&o); err != nil {
+			return err
+		}
 	}
 
 	f := &funcMgr{
@@ -301,7 +317,7 @@ func (f *funcMgr) awaitExit() {
 }
 
 func (f *funcMgr) pause() {
-	<-time.After(f.o.PauseTimeout)
+	<-time.After(f.o.PauseDuration)
 }
 
 func (f *funcMgr) logger(s string) {
