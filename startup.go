@@ -36,6 +36,7 @@ type Options struct {
 	PauseDuration time.Duration
 }
 
+// OptionSetter type allows Options to be optionally set by caller to StartFunctions
 type OptionSetter func(*Options) error
 
 // WithLogging allows a log.Logger to be specified for capturing StartFunctions activity.
