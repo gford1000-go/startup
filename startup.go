@@ -242,18 +242,27 @@ func (f *funcMgr) addFn(fn StartableFunction) {
 	}
 }
 
-// awaitExit allows for graceful shutdown with optional timeout
+// awaitExit allows for graceful shutdown with optional timeout.
+// There are only possible two scenarios:
+// - A StartableFunction has exited, triggering shutdown of any/all others
+// - The external context is Done(), which means all StartableFunctions should shut down
 func (f *funcMgr) awaitExit() {
+
+	select {
+	case <-f.exitCtx.Done():
+		// Wait for notification to exit
+		f.logger("received Done() for exit context")
+	case <-f.ctx.Done():
+		// External context is Done, so attempt close down
+		f.logger("received Done() for external context")
+		f.shutdown()
+	}
+
 	ch := make(chan struct{})
 	defer close(ch)
 
-	// Wait for notification to exit
-	f.logger("waiting for Done() from exit context")
-	<-f.exitCtx.Done()
-	f.logger("received Done() for exit context")
-
 	// In shutdown sequence, each function's inner() will push a struct{}{} to notify that it has exited
-	// So exit will be signalled once all functions have exited
+	// So exit will be signalled to ch, only once all functions have exited
 	go func() {
 		defer func() {
 			ch <- struct{}{}

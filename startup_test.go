@@ -76,6 +76,25 @@ func ExampleStartFunctions_second() {
 	// anotherFn exited as well
 }
 
+func ExampleStartFunctions_external_context_done() {
+
+	myFunc := func(ctx context.Context, opts *FunctionOptions) {
+		defer fmt.Println("myFunc exited")
+
+		<-ctx.Done() // Busy until told to exit
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	StartFunctions(ctx, []StartableFunction{
+		myFunc,
+	})
+
+	// Output:
+	// myFunc exited
+}
+
 func TestStartFunctions(t *testing.T) {
 
 	err := StartFunctions(context.Background(), nil)
