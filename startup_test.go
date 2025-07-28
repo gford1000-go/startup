@@ -14,7 +14,7 @@ func Example() {
 	var buf bytes.Buffer
 	logger := log.New(&buf, "", 0)
 
-	myMain := func(ctx context.Context, opts *FunctionOptions) {
+	myMain := func(ctx context.Context, opts *FunctionOptions, args ...any) {
 		logger.Println("starting myMain")
 		defer logger.Println("exiting myMain")
 
@@ -34,7 +34,7 @@ func Example() {
 
 func ExampleStartFunctions() {
 
-	mainBoom := func(ctx context.Context, opts *FunctionOptions) {
+	mainBoom := func(ctx context.Context, opts *FunctionOptions, args ...any) {
 		<-time.After(50 * time.Millisecond)
 		panic("Boom!")
 	}
@@ -53,13 +53,13 @@ func ExampleStartFunctions() {
 
 func ExampleStartFunctions_second() {
 
-	myMain := func(ctx context.Context, opts *FunctionOptions) {
+	myMain := func(ctx context.Context, opts *FunctionOptions, args ...any) {
 		defer fmt.Println("myMain exited")
 
 		// Emulate finishing work
 		<-time.After(50 * time.Millisecond)
 	}
-	anotherFn := func(ctx context.Context, opts *FunctionOptions) {
+	anotherFn := func(ctx context.Context, opts *FunctionOptions, args ...any) {
 		defer fmt.Println("anotherFn exited as well")
 
 		// Not finished, but will exit
@@ -78,7 +78,7 @@ func ExampleStartFunctions_second() {
 
 func ExampleStartFunctions_external_context_done() {
 
-	myFunc := func(ctx context.Context, opts *FunctionOptions) {
+	myFunc := func(ctx context.Context, opts *FunctionOptions, args ...any) {
 		defer fmt.Println("myFunc exited")
 
 		<-ctx.Done() // Busy until told to exit
@@ -138,7 +138,7 @@ func TestStartNamedFunctions_3(t *testing.T) {
 	var name string = "Foo"
 	var b bytes.Buffer
 
-	myFunc := func(ctx context.Context, opts *FunctionOptions) {
+	myFunc := func(ctx context.Context, opts *FunctionOptions, args ...any) {
 		b.WriteString(opts.Self)
 	}
 
@@ -163,7 +163,7 @@ func TestStartNamedFunctions_4(t *testing.T) {
 
 	var name string = "Foo"
 
-	myFunc := func(ctx context.Context, opts *FunctionOptions) {
+	myFunc := func(ctx context.Context, opts *FunctionOptions, args ...any) {
 		<-time.After(time.Millisecond)
 	}
 
@@ -187,7 +187,7 @@ func TestStartNamedFunctions_5(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	myFunc := func(ctx context.Context, opts *FunctionOptions) {
+	myFunc := func(ctx context.Context, opts *FunctionOptions, args ...any) {
 		buf.WriteString(opts.Self)
 		<-time.After(10 * time.Millisecond)
 	}
@@ -213,7 +213,7 @@ func TestStartNamedFunctions_6(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	myFunc := func(ctx context.Context, opts *FunctionOptions) {
+	myFunc := func(ctx context.Context, opts *FunctionOptions, args ...any) {
 		buf.WriteString(opts.Self)
 	}
 

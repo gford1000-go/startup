@@ -24,7 +24,7 @@ type FunctionOptions struct {
 }
 
 // StartableFunction defines a func that can be provided to StartFunctions
-type StartableFunction func(context.Context, *FunctionOptions)
+type StartableFunction func(context.Context, *FunctionOptions, ...any)
 
 // FunctionDeclaration provides details about each StartableFunction
 type FunctionDeclaration struct {
@@ -32,6 +32,8 @@ type FunctionDeclaration struct {
 	Name string
 	// Func is the StartableFunction to be started, and must not be nil
 	Func StartableFunction
+	// Args will be passed to the StartableFunction as it is launched
+	Args []any
 }
 
 // createNameIfMissing ensures name is only set if it doesn't already exist
@@ -42,6 +44,14 @@ func createNameIfMissing(name string) string {
 		return hex.EncodeToString(b)
 	}
 	return name
+}
+
+// createArgsIfMissing ensures args slice is always populated
+func createArgsIfMissing(args []any) []any {
+	if args == nil {
+		return []any{}
+	}
+	return args
 }
 
 // ErrNameAlreadyExists is raised if the specified Name for the StartableFunction is already in use
@@ -177,8 +187,9 @@ func StartNamedFunctions(ctx context.Context, funcs []FunctionDeclaration, opts 
 	var myFuncs []FunctionDeclaration
 	for _, fn := range funcs {
 		myFuncs = append(myFuncs, FunctionDeclaration{
-			Name: createNameIfMissing(fn.Name),
+			Args: createArgsIfMissing(fn.Args),
 			Func: fn.Func,
+			Name: createNameIfMissing(fn.Name),
 		})
 	}
 
@@ -319,7 +330,7 @@ func (f *funcMgr) fWrapper(ctx context.Context, ctxCancel context.CancelFunc, ch
 		f.logger(fmt.Sprintf("executing StartableFunction %s", fn.Name))
 		defer f.logger(fmt.Sprintf("exited StartableFunction %s", fn.Name))
 
-		fn.Func(ctx, &funcOps)
+		fn.Func(ctx, &funcOps, fn.Args...)
 		return nil
 	}
 
