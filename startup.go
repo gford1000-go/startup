@@ -2,6 +2,8 @@ package startup
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -17,10 +19,51 @@ import (
 type FunctionOptions struct {
 	// DiscoveryService is provided if specified as an option for StartFunctions
 	DiscoveryService DiscoveryService
+	// Self returns the name of this StartableFunction
+	Self string
 }
 
 // StartableFunction defines a func that can be provided to StartFunctions
 type StartableFunction func(context.Context, *FunctionOptions)
+
+// FunctionDeclaration provides details about each StartableFunction
+type FunctionDeclaration struct {
+	// Name must be unique, if specified
+	Name string
+	// Func is the StartableFunction to be started, and must not be nil
+	Func StartableFunction
+}
+
+// createNameIfMissing ensures name is only set if it doesn't already exist
+func createNameIfMissing(name string) string {
+	if len(name) == 0 {
+		b := make([]byte, 16)
+		rand.Reader.Read(b)
+		return hex.EncodeToString(b)
+	}
+	return name
+}
+
+// ErrNameAlreadyExists is raised if the specified Name for the StartableFunction is already in use
+var ErrNameAlreadyExists = errors.New("function names must be unique")
+
+// ErrFuncMustNotBeNil is raised when no StartableFunction has been assigned to the FunctionDeclaration
+var ErrFuncMustNotBeNil = errors.New("function must not be nil")
+
+func (f FunctionDeclaration) validate(m map[string]bool) error {
+	// Name must be unique
+	if _, ok := m[f.Name]; ok {
+		return ErrNameAlreadyExists
+	} else {
+		m[f.Name] = true
+	}
+
+	if f.Func == nil {
+		return ErrFuncMustNotBeNil
+	}
+
+	return nil
+}
 
 // Options allow the behaviour of StartFunctions to be modified
 type Options struct {
@@ -96,17 +139,54 @@ var defaultOptions = Options{
 // ErrMissingStartableFunctions is raised if no StartableFunctions are provided to StartFunctions
 var ErrMissingStartableFunctions = errors.New("at least one StartableFunction must be provided")
 
-// StartFunctions starts the specified StartableFunctions in separate goroutines, each with
-// independent contexts.
+// StartFunctions starts the StartableFunctions defined in the FunctionDeclarations
+// in separate goroutines, each with independent contexts.
 // Should one of the functions exit, whether expected or due to a panic, then the contexts
 // of the other functions will be completed, so they will be expected to detect this and
 // shutdown gracefully as well.
 // Standard interrupts (CTRL-C) are captured, and these will trigger a shutdown request to
 // all functions.
-func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...OptionSetter) error {
+func StartFunctions(ctx context.Context, funcs []StartableFunction, opts ...OptionSetter) error {
+	var dfs = []FunctionDeclaration{}
+	for _, fn := range funcs {
+		dfs = append(dfs, FunctionDeclaration{
+			Func: fn,
+		})
+	}
+	return StartNamedFunctions(ctx, dfs, opts...)
+}
 
-	if len(fs) == 0 {
+// StartNamedFunctions starts the StartableFunctions defined in the FunctionDeclarations
+// in separate goroutines, each with independent contexts.
+// Each FunctionDeclaration must either have no name specified (a unique one is assigned) or
+// a unique to any other specified in the FunctionDeclaration list.  This allows them to communicate
+// to each other via thew DiscoveryService, if that is optionally specified.
+// Should one of the functions exit, whether expected or due to a panic, then the contexts
+// of the other functions will be completed, so they will be expected to detect this and
+// shutdown gracefully as well.
+// Standard interrupts (CTRL-C) are captured, and these will trigger a shutdown request to
+// all functions.
+func StartNamedFunctions(ctx context.Context, funcs []FunctionDeclaration, opts ...OptionSetter) error {
+	if len(funcs) == 0 {
 		return ErrMissingStartableFunctions
+	}
+
+	names := make(map[string]bool, len(funcs))
+
+	// Ensure name applied
+	var myFuncs []FunctionDeclaration
+	for _, fn := range funcs {
+		myFuncs = append(myFuncs, FunctionDeclaration{
+			Name: createNameIfMissing(fn.Name),
+			Func: fn.Func,
+		})
+	}
+
+	// Validate
+	for _, fn := range myFuncs {
+		if err := fn.validate(names); err != nil {
+			return err
+		}
 	}
 
 	o := defaultOptions
@@ -119,9 +199,9 @@ func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...OptionS
 	f := &funcMgr{
 		ctx: ctx,
 		o:   o,
-		cs:  make([]context.Context, 0, len(fs)),
-		cfs: make([]context.CancelFunc, 0, len(fs)),
-		chs: make([]chan struct{}, 0, len(fs)),
+		cs:  make([]context.Context, 0, len(myFuncs)),
+		cfs: make([]context.CancelFunc, 0, len(myFuncs)),
+		chs: make([]chan struct{}, 0, len(myFuncs)),
 	}
 
 	if f.o.DiscoveryService {
@@ -142,7 +222,7 @@ func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...OptionS
 	f.startInterruptHandling()
 
 	// Start the functions
-	for _, fn := range fs {
+	for _, fn := range myFuncs {
 		f.addFn(fn)
 	}
 
@@ -219,27 +299,34 @@ func (f *funcMgr) startInterruptHandling() {
 // Wrapper ensures graceful launch and shutdown, recovering from unhandled panics from functions
 // Note this doesn't deal with all unhandled panics: if functions start further goroutines
 // which then panic, that scenario is uncontrolled
-func (f *funcMgr) fWrapper(ctx context.Context, ctxCancel context.CancelFunc, ch chan struct{}, sf StartableFunction) {
+func (f *funcMgr) fWrapper(ctx context.Context, ctxCancel context.CancelFunc, ch chan struct{}, fn FunctionDeclaration) {
 
-	inner := func(ctx context.Context, fn StartableFunction) (err error) {
-		defer ctxCancel() // Order ensures the supplied ctx is aways cancelled when f() exits
+	inner := func(ctx context.Context, fn FunctionDeclaration) (err error) {
+		defer ctxCancel() // Order ensures the supplied ctx is aways cancelled when fn.Func() exits
 		defer func() {
 			ch <- struct{}{}
 		}()
 		defer func() {
 			if r := recover(); r != nil {
-				err = fmt.Errorf("caught unhandled panic in (%s): %v", runtime.FuncForPC(reflect.ValueOf(sf).Pointer()).Name(), r)
+				err = fmt.Errorf("caught unhandled panic in (%s): %v", runtime.FuncForPC(reflect.ValueOf(fn.Func).Pointer()).Name(), r)
 			}
 		}()
 
-		fn(ctx, &f.funcOps)
+		// Set up funcOps specific to this StartableFunction, from defaults
+		var funcOps = f.funcOps
+		funcOps.Self = fn.Name
+
+		f.logger(fmt.Sprintf("executing StartableFunction %s", fn.Name))
+		defer f.logger(fmt.Sprintf("exited StartableFunction %s", fn.Name))
+
+		fn.Func(ctx, &funcOps)
 		return nil
 	}
 
 	go func() {
 		defer f.shutdown() // Always cancel the cancellable context, triggering shutdown
 
-		err := inner(ctx, sf)
+		err := inner(ctx, fn)
 		if err != nil {
 			f.logPanic(err)
 		}
@@ -251,7 +338,7 @@ func (f *funcMgr) fWrapper(ctx context.Context, ctxCancel context.CancelFunc, ch
 // addFn creates and stores the scaffolding (contexts, chans etc.) needed to manage
 // the lifetime of the provided StartableFunction, ensuring that it can close
 // gracefully if it or another StartableFunction exits
-func (f *funcMgr) addFn(fn StartableFunction) {
+func (f *funcMgr) addFn(fn FunctionDeclaration) {
 
 	f.lck.Lock()
 	defer f.lck.Unlock()
