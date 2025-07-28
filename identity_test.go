@@ -13,7 +13,7 @@ func ExampleCreateAndRegisterID() {
 	var aliceID = "Alice"
 	var bobID = "Bob"
 
-	thisIsBob := func(ctx context.Context, opts *FunctionOptions) {
+	bobsProcessing := func(ctx context.Context, opts *FunctionOptions) {
 		// Initialise Bob to just reflect back what it was given
 		bob, err := CreateAndRegisterID(opts.DiscoveryService, bobID, time.Minute, func(ctx context.Context, r1 *Req, r2 *Res) {
 			r2.Type = r1.Type
@@ -28,7 +28,7 @@ func ExampleCreateAndRegisterID() {
 		bob.Accept(ctx)
 	}
 
-	thisIsAlice := func(ctx context.Context, opts *FunctionOptions) {
+	aliceProcessing := func(ctx context.Context, opts *FunctionOptions) {
 
 		// Alice is only initiating requests, not handling them
 		alice, err := CreateAndRegisterID(opts.DiscoveryService, aliceID, time.Minute, nil)
@@ -54,9 +54,9 @@ func ExampleCreateAndRegisterID() {
 			r.Data.(string) == req.Data.(string))
 	}
 
-	StartFunctions(context.Background(), []StartableFunction{
-		thisIsBob,
-		thisIsAlice,
+	StartNamedFunctions(context.Background(), []FunctionDeclaration{
+		{bobID, bobsProcessing},
+		{aliceID, aliceProcessing},
 	},
 		WithLogging(log.Default(), true),
 		WithTimeout(5*time.Second),
