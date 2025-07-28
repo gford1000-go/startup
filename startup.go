@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"reflect"
 	"runtime"
+	"sync"
 	"time"
 )
 
@@ -125,6 +126,7 @@ type funcMgr struct {
 	ctx            context.Context
 	o              Options
 	funcOps        FunctionOptions
+	lck            sync.Mutex
 	cs             []context.Context
 	cfs            []context.CancelFunc
 	chs            []chan struct{}
@@ -148,6 +150,12 @@ func (f *funcMgr) startAwaitShutdown() {
 		<-f.shutdownCtx.Done()
 
 		f.logger("cancelling all contexts")
+
+		// Gain lock as there is the possibility that addFn() could be
+		// concurrently adding a futher StartableFunction
+		f.lck.Lock()
+		defer f.lck.Unlock()
+
 		for _, cf := range f.cfs {
 			cf()
 		}
@@ -215,18 +223,34 @@ func (f *funcMgr) fWrapper(ctx context.Context, ctxCancel context.CancelFunc, ch
 // the lifetime of the provided StartableFunction, ensuring that it can close
 // gracefully if it or another StartableFunction exits
 func (f *funcMgr) addFn(fn StartableFunction) {
-	c, cf := context.WithCancel(context.Background())
-	ch := make(chan struct{}, 1)
-	f.cs = append(f.cs, c)
-	f.cfs = append(f.cfs, cf)
-	f.chs = append(f.chs, ch)
 
-	f.fWrapper(c, cf, ch, fn)
+	f.lck.Lock()
+	defer f.lck.Unlock()
+
+	// Once lock obtained, only continue if shutdown context is not Done
+	select {
+	case <-f.shutdownCtx.Done():
+	default:
+		c, cf := context.WithCancel(context.Background())
+
+		ch := make(chan struct{}, 1)
+		f.cs = append(f.cs, c)
+		f.cfs = append(f.cfs, cf)
+		f.chs = append(f.chs, ch)
+
+		f.fWrapper(c, cf, ch, fn)
+	}
 }
 
+// awaitExit allows for graceful shutdown with optional timeout
 func (f *funcMgr) awaitExit() {
-	// Handle shutdown with optional timeout
 	ch := make(chan struct{})
+	defer close(ch)
+
+	// Wait for notification to exit
+	f.logger("waiting for Done() from exit context")
+	<-f.exitCtx.Done()
+	f.logger("received Done() for exit context")
 
 	// In shutdown sequence, each function's inner() will push a struct{}{} to notify that it has exited
 	// So exit will be signalled once all functions have exited
@@ -235,6 +259,9 @@ func (f *funcMgr) awaitExit() {
 			ch <- struct{}{}
 		}()
 
+		f.lck.Lock()
+		defer f.lck.Unlock()
+
 		for _, c := range f.chs {
 			<-c
 		}
@@ -242,10 +269,7 @@ func (f *funcMgr) awaitExit() {
 
 	f.pause()
 
-	// Wait for notification to exit
-	<-f.exitCtx.Done()
-
-	f.logger("waiting for Done() from contexts")
+	f.logger("waiting for Done() from StartableFunction contexts")
 	select {
 	case <-ch:
 		f.logger("all contexts are Done()")
