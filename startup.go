@@ -103,17 +103,9 @@ func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*O
 	// Capture interupts that could trigger shutdown
 	f.startInterruptHandling()
 
-	// Contexts for the functions are independent of each other and the supplied context
-	for range len(fs) {
-		c, cf := context.WithCancel(context.Background())
-		f.cs = append(f.cs, c)
-		f.cfs = append(f.cfs, cf)
-		f.chs = append(f.chs, make(chan struct{}, 1))
-	}
-
-	// Start the functions in their own goroutines
-	for i, fn := range fs {
-		f.fWrapper(f.cs[i], f.cfs[i], f.chs[i], fn)
+	// Start the functions
+	for _, fn := range fs {
+		f.addFn(fn)
 	}
 
 	f.awaitExit()
@@ -207,6 +199,19 @@ func (f *funcMgr) fWrapper(ctx context.Context, ctxCancel context.CancelFunc, ch
 	}()
 
 	f.pause()
+}
+
+// addFn creates and stores the scaffolding (contexts, chans etc.) needed to manage
+// the lifetime of the provided StartableFunction, ensuring that it can close
+// gracefully if it or another StartableFunction exits
+func (f *funcMgr) addFn(fn StartableFunction) {
+	c, cf := context.WithCancel(context.Background())
+	ch := make(chan struct{}, 1)
+	f.cs = append(f.cs, c)
+	f.cfs = append(f.cfs, cf)
+	f.chs = append(f.chs, ch)
+
+	f.fWrapper(c, cf, ch, fn)
 }
 
 func (f *funcMgr) awaitExit() {
