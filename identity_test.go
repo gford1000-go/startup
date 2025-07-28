@@ -9,13 +9,9 @@ import (
 
 func ExampleCreateAndRegisterID() {
 
-	// Our protagonists
-	var aliceID = "Alice"
-	var bobID = "Bob"
-
 	bobsProcessing := func(ctx context.Context, opts *FunctionOptions, args ...any) {
 		// Initialise Bob to just reflect back what it was given
-		bob, err := CreateAndRegisterID(opts.DiscoveryService, bobID, time.Minute, func(ctx context.Context, r1 *Req, r2 *Res) {
+		bob, err := CreateAndRegisterID(opts.DiscoveryService, opts.Self, time.Minute, func(ctx context.Context, r1 *Req, r2 *Res) {
 			r2.Type = r1.Type
 			r2.Data = r1.Data
 			r2.Status = Success
@@ -31,9 +27,18 @@ func ExampleCreateAndRegisterID() {
 	aliceProcessing := func(ctx context.Context, opts *FunctionOptions, args ...any) {
 
 		// Alice is only initiating requests, not handling them
-		alice, err := CreateAndRegisterID(opts.DiscoveryService, aliceID, time.Minute, nil)
+		alice, err := CreateAndRegisterID(opts.DiscoveryService, opts.Self, time.Minute, nil)
 		if err != nil {
 			panic(err)
+		}
+
+		// Details of Bob are passed as the first arg
+		if len(args) != 1 {
+			panic("unexpected args")
+		}
+		bobID, ok := args[0].(string)
+		if !ok {
+			panic(fmt.Sprintf("expected string arg, got: %v", args[0]))
 		}
 
 		c, err := alice.Connect(ctx, bobID, WithConnectDiscoveryService(opts.DiscoveryService))
@@ -55,8 +60,8 @@ func ExampleCreateAndRegisterID() {
 	}
 
 	StartNamedFunctions(context.Background(), []FunctionDeclaration{
-		{bobID, bobsProcessing, nil},
-		{aliceID, aliceProcessing, nil},
+		{"Bob", bobsProcessing, nil},
+		{"Alice", aliceProcessing, []any{"Bob"}},
 	},
 		WithLogging(log.Default(), true),
 		WithTimeout(5*time.Second),
