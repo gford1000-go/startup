@@ -95,6 +95,21 @@ func ExampleStartFunctions_external_context_done() {
 	// myFunc exited
 }
 
+func ExampleStartNamedFunctions() {
+	myFuncName := "FooBar"
+
+	myMain := func(ctx context.Context, opts *FunctionOptions, args ...any) {
+		fmt.Printf("%s: %s\n", opts.Self, args[0])
+	}
+
+	StartNamedFunctions(context.Background(), []FunctionDeclaration{
+		{Name: myFuncName, Func: myMain, Args: []any{"Hello World"}},
+	})
+
+	// Output:
+	// FooBar: Hello World
+}
+
 func TestStartFunctions(t *testing.T) {
 
 	err := StartFunctions(context.Background(), nil)
