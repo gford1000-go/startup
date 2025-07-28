@@ -2,6 +2,7 @@ package startup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -64,6 +65,9 @@ var defaultOptions = Options{
 	Timeout: 30 * time.Second,
 }
 
+// ErrMissingStartableFunctions is raised if no StartableFunctions are provided to StartFunctions
+var ErrMissingStartableFunctions = errors.New("at least one StartableFunction must be provided")
+
 // StartFunctions starts the specified StartableFunctions in separate goroutines, each with
 // independent contexts.
 // Should one of the functions exit, whether expected or due to a panic, then the contexts
@@ -71,7 +75,11 @@ var defaultOptions = Options{
 // shutdown gracefully as well.
 // Standard interrupts (CTRL-C) are captured, and these will trigger a shutdown request to
 // all functions.
-func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*Options)) {
+func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*Options)) error {
+
+	if len(fs) == 0 {
+		return ErrMissingStartableFunctions
+	}
 
 	o := defaultOptions
 	for _, opt := range opts {
@@ -109,6 +117,8 @@ func StartFunctions(ctx context.Context, fs []StartableFunction, opts ...func(*O
 	}
 
 	f.awaitExit()
+
+	return nil
 }
 
 type funcMgr struct {

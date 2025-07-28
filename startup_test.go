@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"testing"
 	"time"
 )
 
@@ -73,4 +74,13 @@ func ExampleStartFunctions_second() {
 	// Output:
 	// myMain exited
 	// anotherFn exited as well
+}
+
+func TestStartFunctions(t *testing.T) {
+
+	err := StartFunctions(context.Background(), nil)
+
+	if err != ErrMissingStartableFunctions {
+		t.Fatalf("Expected error: ErrMissingStartableFunctions, got: %v", err)
+	}
 }
