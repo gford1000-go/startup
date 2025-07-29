@@ -17,10 +17,12 @@ import (
 
 // FunctionOptions are options provided to StartableFunctions
 type FunctionOptions struct {
-	// DiscoveryService is provided if specified as an option for StartFunctions
-	DiscoveryService DiscoveryService
 	// Self returns the name of this StartableFunction
 	Self string
+	// DiscoveryService is available only when using StartNamedFunctions
+	DiscoveryService DiscoveryService
+	// Identity is populated if the StartableFunction has been registered with the DiscoveryService
+	Identity Identity
 }
 
 // StartableFunction defines a func that can be provided to StartFunctions
@@ -34,6 +36,14 @@ type FunctionDeclaration struct {
 	Func StartableFunction
 	// Args will be passed to the StartableFunction as it is launched
 	Args []any
+	// RegisterWithDiscoveryService, if true, will attempt to register the StartableFunction with the
+	// DiscoveryService,regardless of the value of Handler.  This allows outgoing connections
+	// without requiring a listener to be established.
+	// If false, the StartableFunction still has access to the DiscoveryService to register itself manually.
+	RegisterWithDiscoveryService bool
+	// Handler will be used to listen for and process incoming messages.
+	// If nil, the StartableFunction still has access to the DiscoveryService to initate listening manually.
+	Handler Handler
 }
 
 // createNameIfMissing ensures name is only set if it doesn't already exist
@@ -83,8 +93,8 @@ type Options struct {
 	ReportPanicsOnly bool
 	// Timeout specifies the duration to wait for StartableFunctions to gracefully exit
 	Timeout time.Duration
-	// DiscoveryService will create a new DiscoveryService that is provided to StartableFunctions
-	DiscoveryService bool
+	// noDiscoveryService is not directly settable, set by StartFunctions
+	noDiscoveryService bool
 	// PauseDuration is the duration a routine will wait, to allow a goroutine it has started time to be to scheduled
 	PauseDuration time.Duration
 }
@@ -119,10 +129,13 @@ func WithTimeout(d time.Duration) OptionSetter {
 	}
 }
 
-// WithDiscoveryService specifies a DiscoveryService should be created
-func WithDiscoveryService() OptionSetter {
+// withoutDiscoveryService specifies a DiscoveryService should NOT be created
+// This is specified when StartFunctions is used rather than StartNamedFunctions,
+// as the goroutines started by StartFunctions are anonymous, and hence no communication
+// between them should be possible.
+func withoutDiscoveryService() OptionSetter {
 	return func(o *Options) error {
-		o.DiscoveryService = true
+		o.noDiscoveryService = true
 		return nil
 	}
 }
@@ -163,7 +176,10 @@ func StartFunctions(ctx context.Context, funcs []StartableFunction, opts ...Opti
 			Func: fn,
 		})
 	}
-	return StartNamedFunctions(ctx, dfs, opts...)
+	optsEx := append([]OptionSetter{}, opts...)
+	optsEx = append(optsEx, withoutDiscoveryService())
+
+	return StartNamedFunctions(ctx, dfs, optsEx...)
 }
 
 // StartNamedFunctions starts the StartableFunctions defined in the FunctionDeclarations
@@ -187,9 +203,11 @@ func StartNamedFunctions(ctx context.Context, funcs []FunctionDeclaration, opts 
 	var myFuncs []FunctionDeclaration
 	for _, fn := range funcs {
 		myFuncs = append(myFuncs, FunctionDeclaration{
-			Args: createArgsIfMissing(fn.Args),
-			Func: fn.Func,
-			Name: createNameIfMissing(fn.Name),
+			Args:                         createArgsIfMissing(fn.Args),
+			Func:                         fn.Func,
+			Name:                         createNameIfMissing(fn.Name),
+			Handler:                      fn.Handler,
+			RegisterWithDiscoveryService: fn.RegisterWithDiscoveryService,
 		})
 	}
 
@@ -215,7 +233,7 @@ func StartNamedFunctions(ctx context.Context, funcs []FunctionDeclaration, opts 
 		chs: make([]chan struct{}, 0, len(myFuncs)),
 	}
 
-	if f.o.DiscoveryService {
+	if !f.o.noDiscoveryService {
 		f.funcOps.DiscoveryService = NewDiscoveryService()
 	}
 
@@ -312,7 +330,7 @@ func (f *funcMgr) startInterruptHandling() {
 // which then panic, that scenario is uncontrolled
 func (f *funcMgr) fWrapper(ctx context.Context, ctxCancel context.CancelFunc, ch chan struct{}, fn FunctionDeclaration) {
 
-	inner := func(ctx context.Context, fn FunctionDeclaration) (err error) {
+	inner := func(ctx context.Context, fn *FunctionDeclaration) (err error) {
 		defer ctxCancel() // Order ensures the supplied ctx is aways cancelled when fn.Func() exits
 		defer func() {
 			ch <- struct{}{}
@@ -327,6 +345,31 @@ func (f *funcMgr) fWrapper(ctx context.Context, ctxCancel context.CancelFunc, ch
 		var funcOps = f.funcOps
 		funcOps.Self = fn.Name
 
+		// If DiscoveryService is running then can register the StartableFunction if requested
+		// either directly via the RegisterWithDiscoveryService flag, or indirectly by the
+		// presence of a Handler
+		if funcOps.DiscoveryService != nil {
+			if fn.RegisterWithDiscoveryService || fn.Handler != nil {
+				identity, err := CreateAndRegisterID(funcOps.DiscoveryService, funcOps.Self, time.Minute, fn.Handler)
+				if err != nil {
+					return err
+				}
+				funcOps.Identity = identity
+			}
+
+			// Wait for Connection requests and handle them, until context is Done
+			if fn.Handler != nil {
+				go func(ctx context.Context, identity Identity) {
+					defer f.logger(fmt.Sprintf("listening ended for %s", identity.ID()))
+
+					f.logger(fmt.Sprintf("listening started for %s", identity.ID()))
+					identity.Accept(ctx)
+				}(ctx, funcOps.Identity)
+
+				f.pause()
+			}
+		}
+
 		f.logger(fmt.Sprintf("executing StartableFunction %s", fn.Name))
 		defer f.logger(fmt.Sprintf("exited StartableFunction %s", fn.Name))
 
@@ -337,7 +380,7 @@ func (f *funcMgr) fWrapper(ctx context.Context, ctxCancel context.CancelFunc, ch
 	go func() {
 		defer f.shutdown() // Always cancel the cancellable context, triggering shutdown
 
-		err := inner(ctx, fn)
+		err := inner(ctx, &fn)
 		if err != nil {
 			f.logPanic(err)
 		}
